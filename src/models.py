@@ -6,11 +6,7 @@ class Address(BaseModel):
     country: str
 
 
-class CreateStudentRequestBody(BaseModel):
+class Student(BaseModel):
     name: str
     age: int
     address: Address
-
-
-class CreateStudentResponseBody(BaseModel):
-    id: str
