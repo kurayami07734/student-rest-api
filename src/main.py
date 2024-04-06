@@ -4,13 +4,13 @@ from contextlib import asynccontextmanager
 from bson.objectid import ObjectId
 
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 
 from pymongo.mongo_client import MongoClient
 from pymongo.collection import Collection
 
-from src.models import Student
+from src.models import Student, StudentOptional
 
 student_collection: Collection = None
 
@@ -56,5 +56,31 @@ async def all_students(country: str | None = None, age: int = 0):
 @app.get("/students/{id}")
 def student_by_id(id: str):
     student = student_collection.find_one(ObjectId(id))
+
+    if student is None:
+        raise HTTPException(status_code=404, detail="Student not found")
+
     del student["_id"]  # remove id field because is not getting encoded
     return student
+
+
+@app.patch("/students/{id}", status_code=204)
+async def update_student(id: str, request_body: StudentOptional):
+    student = student_collection.find_one(ObjectId(id))
+    if student is None:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    fields_to_update = request_body.model_dump(exclude_none=True)
+
+    student_collection.update_one(
+        filter={"_id": ObjectId(id)}, update={"$set": fields_to_update}
+    )
+
+
+@app.delete("/students/{id}")
+async def delete_student(id: str):
+    student = student_collection.find_one(ObjectId(id))
+    if student is None:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    student_collection.delete_one(filter={"_id": ObjectId(id)})
