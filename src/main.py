@@ -72,6 +72,11 @@ async def update_student(id: str, request_body: StudentOptional):
 
     fields_to_update = request_body.model_dump(exclude_none=True)
 
+    if "address" in fields_to_update:  # deep merging address field
+        fields_to_update["address"] = student["address"] | fields_to_update["address"]
+
+    fields_to_update = student | fields_to_update
+
     student_collection.update_one(
         filter={"_id": ObjectId(id)}, update={"$set": fields_to_update}
     )
