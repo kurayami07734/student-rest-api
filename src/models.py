@@ -1,5 +1,17 @@
-from typing import Optional
+from typing import Optional, TypedDict
 from pydantic import BaseModel
+
+
+class MongoAddress(TypedDict):
+    city: str
+    country: str
+
+
+class MongoStudent(TypedDict):
+    _id: str
+    name: str
+    age: int
+    address: MongoAddress
 
 
 class Address(BaseModel):

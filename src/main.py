@@ -1,7 +1,8 @@
-from dotenv import load_dotenv
-from os import getenv
 from contextlib import asynccontextmanager
 from bson.objectid import ObjectId
+from dotenv import load_dotenv
+from os import getenv
+from typing import Optional
 
 
 from fastapi import FastAPI, HTTPException
@@ -10,9 +11,11 @@ from fastapi.responses import RedirectResponse
 from pymongo.mongo_client import MongoClient
 from pymongo.collection import Collection
 
-from src.models import Student, StudentOptional
+from pydantic import create_model
 
-student_collection: Collection = None
+from src.models import Address, Student, MongoStudent, StudentOptional
+
+student_collection: Optional[Collection[MongoStudent]] = None
 
 
 @asynccontextmanager
@@ -21,6 +24,8 @@ async def lifespan(app: FastAPI):
     global student_collection
     client = MongoClient(getenv("ATLAS_CONNECTION_URL"))
     student_collection = client["Cluster0"].students
+    if student_collection is None:
+        raise HTTPException(status_code=500, detail="Could not find student collection")
     yield
     student_collection = None
     client.close()
@@ -38,35 +43,49 @@ async def root():
 async def create_student(
     request_body: Student,
 ):
-    new_student = student_collection.insert_one(request_body.model_dump())
+    assert student_collection is not None, "student collection should be none"
+    student = MongoStudent(**request_body.model_dump())
+    new_student = student_collection.insert_one(student)
     return {"id": str(new_student.inserted_id)}
 
 
 @app.get("/students")
-async def all_students(country: str | None = None, age: int = 0):
+async def all_students(country: Optional[str] = None, age: int = 0):
+    assert student_collection is not None, "student collection should be none"
     all_students = list(student_collection.find())
+
     if country is not None:
         all_students = [s for s in all_students if s["address"]["country"] == country]
+
     all_students = [
         {"name": s["name"], "age": s["age"]} for s in all_students if s["age"] >= age
     ]
+
     return {"data": all_students}
 
 
 @app.get("/students/{id}")
 def student_by_id(id: str):
-    student = student_collection.find_one(ObjectId(id))
+    assert student_collection is not None, "student collection should be none"
+    student = student_collection.find_one(filter={"_id": ObjectId(id)})
 
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")
 
-    del student["_id"]  # remove id field because is not getting encoded
-    return student
+    return Student(
+        name=student["name"],
+        age=student["age"],
+        address=Address(
+            city=student["address"]["city"], country=student["address"]["country"]
+        ),
+    )
 
 
 @app.patch("/students/{id}", status_code=204)
 async def update_student(id: str, request_body: StudentOptional):
-    student = student_collection.find_one(ObjectId(id))
+    assert student_collection is not None, "student collection should be none"
+    student = student_collection.find_one(filter={"_id": ObjectId(id)})
+
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")
 
@@ -84,7 +103,9 @@ async def update_student(id: str, request_body: StudentOptional):
 
 @app.delete("/students/{id}")
 async def delete_student(id: str):
-    student = student_collection.find_one(ObjectId(id))
+    assert student_collection is not None, "student collection should be none"
+    student = student_collection.find_one(filter={"_id": ObjectId(id)})
+
     if student is None:
         raise HTTPException(status_code=404, detail="Student not found")
 
