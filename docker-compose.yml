@@ -1,0 +1,22 @@
+services:
+  student-rest-api:
+    platform: linux/x86_64
+    build: .
+    tty: true
+    stdin_open: true
+    restart: unless-stopped
+    container_name: student-rest-api
+    ports:
+      - 8080:8080
+    depends_on:
+      - redis
+
+
+  redis:
+    image: bitnami/redis:latest
+    container_name: student-rest-api-redis
+    restart: always
+    ports:
+      - 6379:6379
+    environment:
+      ALLOW_EMPTY_PASSWORD: yes

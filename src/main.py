@@ -5,33 +5,63 @@ from os import getenv
 from typing import Optional
 
 
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import RedirectResponse, Response
 
 from pymongo.mongo_client import MongoClient
 from pymongo.collection import Collection
 
-from pydantic import create_model
+import redis
+
 
 from src.models import Address, Student, MongoStudent, StudentOptional
 
 student_collection: Optional[Collection[MongoStudent]] = None
 
+redis_instance: Optional[redis.Redis] = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     load_dotenv()
+
     global student_collection
+    global redis_instance
+
+    redis_instance = redis.Redis(host="127.0.0.1", port=6379, db=0)
+
     client = MongoClient(getenv("ATLAS_CONNECTION_URL"))
     student_collection = client["Cluster0"].students
+
     if student_collection is None:
         raise HTTPException(status_code=500, detail="Could not find student collection")
+
     yield
+
     student_collection = None
     client.close()
 
 
 app = FastAPI(title="Student REST API", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def rate_limiter(req: Request, call_next):
+    assert redis_instance is not None, "redis instance should not be none"
+    assert req.client is not None, "client must have address"
+
+    if await redis_instance.get(req.client.host) is None:
+        print("set to zero", req.client.host)
+        redis_instance.set(req.client.host, 0)
+    else:
+        print("incrementing", req.client.host)
+        redis_instance.set(
+            req.client.host, await redis_instance.get(req.client.host) + 1
+        )
+    if await redis_instance.get(req.client.host) > 1:
+        return Response(content="Limit reached for today", status_code=429)
+    response = await call_next(req)
+    return response
 
 
 @app.get("/", include_in_schema=False)
@@ -44,6 +74,7 @@ async def create_student(
     request_body: Student,
 ):
     assert student_collection is not None, "student collection should be none"
+
     student = MongoStudent(**request_body.model_dump())
     new_student = student_collection.insert_one(student)
     return {"id": str(new_student.inserted_id)}
@@ -52,6 +83,7 @@ async def create_student(
 @app.get("/students")
 async def all_students(country: Optional[str] = None, age: int = 0):
     assert student_collection is not None, "student collection should be none"
+
     all_students = list(student_collection.find())
 
     if country is not None:
@@ -67,6 +99,7 @@ async def all_students(country: Optional[str] = None, age: int = 0):
 @app.get("/students/{id}")
 def student_by_id(id: str):
     assert student_collection is not None, "student collection should be none"
+
     student = student_collection.find_one(filter={"_id": ObjectId(id)})
 
     if student is None:
@@ -84,6 +117,7 @@ def student_by_id(id: str):
 @app.patch("/students/{id}", status_code=204)
 async def update_student(id: str, request_body: StudentOptional):
     assert student_collection is not None, "student collection should be none"
+
     student = student_collection.find_one(filter={"_id": ObjectId(id)})
 
     if student is None:
@@ -104,6 +138,7 @@ async def update_student(id: str, request_body: StudentOptional):
 @app.delete("/students/{id}")
 async def delete_student(id: str):
     assert student_collection is not None, "student collection should be none"
+
     student = student_collection.find_one(filter={"_id": ObjectId(id)})
 
     if student is None:
