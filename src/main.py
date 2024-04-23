@@ -18,7 +18,7 @@ import redis
 
 from src.models import Address, Student, MongoStudent, StudentOptional
 
-MAX_API_CALLS_PER_DAY = 35
+MAX_API_CALLS_PER_DAY = 100
 
 student_collection: Optional[Collection[MongoStudent]] = None
 
@@ -32,7 +32,13 @@ async def lifespan(app: FastAPI):
     global student_collection
     global redis_instance
 
-    redis_instance = redis.Redis(host="redis", port=6379, db=0, decode_responses=True)
+    redis_instance = redis.Redis(
+        host="redis",
+        port=6379,
+        db=0,
+        decode_responses=True,
+        username=getenv("REDIS_USERNAME"),
+    )
 
     client = MongoClient(getenv("ATLAS_CONNECTION_URL"))
     student_collection = client["Cluster0"].students
@@ -40,10 +46,15 @@ async def lifespan(app: FastAPI):
     if student_collection is None:
         raise HTTPException(status_code=500, detail="Could not find student collection")
 
+    if redis_instance is None:
+        raise HTTPException(status_code=500, detail="Could not connect to redis")
+
     yield
 
     student_collection = None
+    redis_instance = None
     client.close()
+    # redis does not need to be explicitly closed
 
 
 app = FastAPI(title="Student REST API", lifespan=lifespan)
@@ -68,11 +79,9 @@ async def rate_limiter(req: Request, call_next):
 
     count = int(count)
 
-    print(date, count)
-
     if date != today:
         redis_instance.set(req.client.host, f"{today}:{1}")
-    elif count < MAX_API_CALLS_PER_DAY:
+    elif count <= MAX_API_CALLS_PER_DAY:
         redis_instance.set(req.client.host, f"{today}:{count + 1}")
     else:
         return Response(status_code=429, content="Too many requests today")
