@@ -1,9 +1,11 @@
 from contextlib import asynccontextmanager
 from bson.objectid import ObjectId
-from dotenv import load_dotenv
+from datetime import date as dt_date
 from os import getenv
 from typing import Optional
 
+
+from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
@@ -15,6 +17,8 @@ import redis
 
 
 from src.models import Address, Student, MongoStudent, StudentOptional
+
+MAX_API_CALLS_PER_DAY = 35
 
 student_collection: Optional[Collection[MongoStudent]] = None
 
@@ -28,7 +32,7 @@ async def lifespan(app: FastAPI):
     global student_collection
     global redis_instance
 
-    redis_instance = redis.Redis(host="127.0.0.1", port=6379, db=0)
+    redis_instance = redis.Redis(host="redis", port=6379, db=0, decode_responses=True)
 
     client = MongoClient(getenv("ATLAS_CONNECTION_URL"))
     student_collection = client["Cluster0"].students
@@ -50,17 +54,29 @@ async def rate_limiter(req: Request, call_next):
     assert redis_instance is not None, "redis instance should not be none"
     assert req.client is not None, "client must have address"
 
-    if await redis_instance.get(req.client.host) is None:
-        print("set to zero", req.client.host)
-        redis_instance.set(req.client.host, 0)
-    else:
-        print("incrementing", req.client.host)
-        redis_instance.set(
-            req.client.host, await redis_instance.get(req.client.host) + 1
-        )
-    if await redis_instance.get(req.client.host) > 1:
-        return Response(content="Limit reached for today", status_code=429)
+    today = dt_date.today().strftime("%Y-%m-%d")
+
+    res: Optional[str] = redis_instance.get(req.client.host)  # type: ignore
+
     response = await call_next(req)
+
+    if res is None:
+        redis_instance.set(req.client.host, f"{today}:{1}")
+        return response
+
+    date, count = res.split(":")
+
+    count = int(count)
+
+    print(date, count)
+
+    if date != today:
+        redis_instance.set(req.client.host, f"{today}:{1}")
+    elif count < MAX_API_CALLS_PER_DAY:
+        redis_instance.set(req.client.host, f"{today}:{count + 1}")
+    else:
+        return Response(status_code=429, content="Too many requests today")
+
     return response
 
 
